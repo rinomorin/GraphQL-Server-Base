@@ -137,3 +137,12 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# python venv
+.venv311/
+venv311/
+.venv312/
+venv312/
+# python
+**/__pycache__/
+

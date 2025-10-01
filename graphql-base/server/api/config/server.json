@@ -1,0 +1,5 @@
+{
+  "SECRET_KEY": "your-strong-secret-key",
+  "ALGORITHM": "HS256",
+  "ACCESS_TOKEN_EXPIRE_MINUTES": 30
+}

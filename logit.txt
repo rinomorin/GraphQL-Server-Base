@@ -1,0 +1,54 @@
+Wrote to /opt/app/projects/GraphQL-Server-Base/graphql-base/front-end-311/package.json:
+
+{
+  "name": "front-end-311",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
+
+
+
+
+> front-end@1.0.0 dev
+> vite
+
+Wrote to /opt/app/projects/GraphQL-Server-Base/graphql-base/front-end-312/package.json:
+
+{
+  "name": "front-end-312",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
+
+
+
+
+  VITE v7.1.7  ready in 273 ms
+
+  ➜  Local:   https://localhost:5173/
+  ➜  Local:   https://rmorin.morinsoft.ca:5173/
+  ➜  Network: https://192.168.100.127:5173/
+
+> front-end@1.0.0 dev
+> vite
+
+
+  VITE v7.1.7  ready in 238 ms
+
+  ➜  Local:   https://localhost:5174/
+  ➜  Local:   https://rmorin.morinsoft.ca:5174/
+  ➜  Network: https://192.168.100.127:5174/

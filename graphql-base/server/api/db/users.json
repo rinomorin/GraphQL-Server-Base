@@ -1,0 +1,13 @@
+    {
+      "rino": {
+      "hashed_password": "$2b$12$fvHZs3.6CDEVzIs/Y76ZaemPYP8Uzq2Jrb9RIHjnOaJMO4ar8SPJW",
+      "roles": ["admin"],
+      "id": "user-001"
+    },
+    "alex": {
+        "username": "alex",
+        "hashed_password": "$2b$12$xyz456...hashedvalue...",
+        "roles": ["viewer"],
+        "id": "user-002"
+    }
+    }

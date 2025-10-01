@@ -1,0 +1,60 @@
+.
+├── graphql-base
+│   ├── front-end
+│   │   ├── package.json
+│   │   ├── package-lock.json
+│   │   ├── src
+│   │   │   ├── App.tsx
+│   │   │   ├── index.html
+│   │   │   └── main.tsx
+│   │   ├── ssl
+│   │   │   ├── mkcert-v1.4.4-linux-amd64
+│   │   │   ├── rmorin-key.pem
+│   │   │   └── rmorin.pem
+│   │   └── vite.config.js
+│   ├── front-end-311
+│   │   ├── package.json
+│   │   └── start.sh
+│   ├── front-end-312
+│   │   ├── package.json
+│   │   └── start.sh
+│   └── server
+│       ├── api
+│       │   ├── auth
+│       │   │   ├── password.py
+│       │   │   ├── token.py
+│       │   │   └── user.py
+│       │   ├── config
+│       │   │   └── server..json
+│       │   ├── config.py
+│       │   ├── db
+│       │   │   └── users.json
+│       │   ├── __init__.py
+│       │   ├── models.py
+│       │   ├── __pycache__
+│       │   │   ├── __init__.cpython-311.pyc
+│       │   │   ├── __init__.cpython-312.pyc
+│       │   │   ├── routes.cpython-311.pyc
+│       │   │   ├── routes.cpython-312.pyc
+│       │   │   ├── schema.cpython-311.pyc
+│       │   │   └── schema.cpython-312.pyc
+│       │   ├── routes.py
+│       │   └── schema.py
+│       ├── __pycache__
+│       │   ├── config.cpython-312.pyc
+│       │   └── run.cpython-312.pyc
+│       ├── requirements.txt
+│       ├── run.py
+│       └── ssl
+│           ├── mkcert-v1.4.4-linux-amd64
+│           ├── rmorin-key.pem
+│           └── rmorin.pem
+├── init-build.sh
+├── logit.txt
+├── package.json
+├── package-lock.json
+├── README.md
+├── restart.sh
+└── tree.txt
+
+14 directories, 43 files

@@ -4,3 +4,4 @@ flask-cors
 bcrypt==3.2.0
 python-jose>=3.3.0
 passlib[bcrypt]>=1.7.4
+redis>=4.0

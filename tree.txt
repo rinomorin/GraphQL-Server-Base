@@ -18,38 +18,81 @@
 │   ├── front-end-312
 │   │   ├── package.json
 │   │   └── start.sh
-│   └── server
-│       ├── api
-│       │   ├── auth
-│       │   │   ├── password.py
-│       │   │   ├── token.py
-│       │   │   └── user.py
-│       │   ├── config
-│       │   │   └── server..json
-│       │   ├── config.py
-│       │   ├── db
-│       │   │   └── users.json
-│       │   ├── __init__.py
-│       │   ├── models.py
-│       │   ├── __pycache__
-│       │   │   ├── __init__.cpython-311.pyc
-│       │   │   ├── __init__.cpython-312.pyc
-│       │   │   ├── routes.cpython-311.pyc
-│       │   │   ├── routes.cpython-312.pyc
-│       │   │   ├── schema.cpython-311.pyc
-│       │   │   └── schema.cpython-312.pyc
-│       │   ├── routes.py
-│       │   └── schema.py
-│       ├── __pycache__
-│       │   ├── config.cpython-312.pyc
-│       │   └── run.cpython-312.pyc
-│       ├── requirements.txt
-│       ├── run.py
-│       └── ssl
-│           ├── mkcert-v1.4.4-linux-amd64
-│           ├── rmorin-key.pem
-│           └── rmorin.pem
+│   ├── server
+│   │   ├── api
+│   │   │   ├── auth
+│   │   │   │   ├── password.py
+│   │   │   │   ├── __pycache__
+│   │   │   │   │   ├── password.cpython-311.pyc
+│   │   │   │   │   ├── password.cpython-312.pyc
+│   │   │   │   │   ├── token.cpython-311.pyc
+│   │   │   │   │   ├── token.cpython-312.pyc
+│   │   │   │   │   ├── user.cpython-311.pyc
+│   │   │   │   │   └── user.cpython-312.pyc
+│   │   │   │   ├── token.py
+│   │   │   │   └── user.py
+│   │   │   ├── config
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── __pycache__
+│   │   │   │   │   └── __init__.cpython-312.pyc
+│   │   │   │   └── server.json
+│   │   │   ├── config.py
+│   │   │   ├── db
+│   │   │   │   └── users.json
+│   │   │   ├── handlers
+│   │   │   │   ├── admin_handlers.py
+│   │   │   │   ├── auth_handlers.py
+│   │   │   │   ├── introspect_handlers.py
+│   │   │   │   └── __pycache__
+│   │   │   │       ├── admin_handlers.cpython-311.pyc
+│   │   │   │       ├── admin_handlers.cpython-312.pyc
+│   │   │   │       ├── auth_handlers.cpython-311.pyc
+│   │   │   │       └── auth_handlers.cpython-312.pyc
+│   │   │   ├── __init__.py
+│   │   │   ├── logs
+│   │   │   │   └── auth.log.json
+│   │   │   ├── models.py
+│   │   │   ├── permissions.py
+│   │   │   ├── __pycache__
+│   │   │   │   ├── config.cpython-312.pyc
+│   │   │   │   ├── __init__.cpython-311.pyc
+│   │   │   │   ├── __init__.cpython-312.pyc
+│   │   │   │   ├── permissions.cpython-311.pyc
+│   │   │   │   ├── permissions.cpython-312.pyc
+│   │   │   │   ├── routes.cpython-311.pyc
+│   │   │   │   ├── routes.cpython-312.pyc
+│   │   │   │   ├── schema.cpython-311.pyc
+│   │   │   │   ├── schema.cpython-312.pyc
+│   │   │   │   ├── settings.cpython-311.pyc
+│   │   │   │   └── settings.cpython-312.pyc
+│   │   │   ├── routes.py
+│   │   │   ├── schema.py
+│   │   │   ├── settings.py
+│   │   │   └── utils
+│   │   │       ├── keys.py
+│   │   │       ├── logger.py
+│   │   │       ├── __pycache__
+│   │   │       │   ├── keys.cpython-311.pyc
+│   │   │       │   ├── keys.cpython-312.pyc
+│   │   │       │   ├── logger.cpython-311.pyc
+│   │   │       │   ├── logger.cpython-312.pyc
+│   │   │       │   ├── revocation.cpython-311.pyc
+│   │   │       │   └── revocation.cpython-312.pyc
+│   │   │       ├── revocation.py
+│   │   │       └── used_jtis.json
+│   │   ├── __pycache__
+│   │   │   ├── config.cpython-312.pyc
+│   │   │   ├── run.cpython-311.pyc
+│   │   │   └── run.cpython-312.pyc
+│   │   ├── requirements.txt
+│   │   ├── run.py
+│   │   └── ssl
+│   │       ├── mkcert-v1.4.4-linux-amd64
+│   │       ├── rmorin-key.pem
+│   │       └── rmorin.pem
+│   └── server_patch.diff
 ├── init-build.sh
+├── login.txt
 ├── logit.txt
 ├── package.json
 ├── package-lock.json
@@ -57,4 +100,4 @@
 ├── restart.sh
 └── tree.txt
 
-14 directories, 43 files
+21 directories, 79 files

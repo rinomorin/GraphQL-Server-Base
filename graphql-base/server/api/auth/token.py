@@ -1,15 +1,14 @@
 # server/api/auth/token.py
 """
-Token utilities with hardened signing, verification, key manager integration,
-atomic one-time-use enforcement, and chain TTL enforcement.
-
+Token utilities with:
+- centralized sign/verify using KeyManager and optional KMS fallback
+- kid header support for key rotation
+- server-authoritative, HMAC-signed chain metadata verification
+- atomic consume via revocation.consume_jti_atomically
+- chain TTL enforcement and conservative failure behavior
 Exports:
-- decode_token
-- sign_jwt
-- create_token_pair
-- rotate_refresh_token_and_issue_pair
-- refresh_token_flow
-- has_scope
+- decode_token, sign_jwt, create_token_pair,
+- rotate_refresh_token_and_issue_pair, refresh_token_flow, has_scope
 """
 from __future__ import annotations
 import os
@@ -30,9 +29,11 @@ from server.api.utils.revocation import (
     get_chain_meta,
     set_chain_revoked,
     consume_jti_atomically,
+    is_revoked,
 )
 from server.api.utils.revocation import revoke_rotation_chain_atomic as revocation_revoke_chain
 from server.api.utils.keys import get_key_manager
+from server.api.utils.keys_kms import get_secret_from_kms
 
 # Configuration
 ENV = os.environ.get("ENV", "dev")
@@ -47,10 +48,14 @@ ENFORCE_CHAIN_TTL = os.environ.get("ENFORCE_CHAIN_TTL", "1") == "1"
 
 _key_manager = get_key_manager()
 
-# Startup safety
+# Startup safety checks
 if ENV != "dev":
     if not _key_manager.list_keys() and LEGACY_SECRET == "changeme-local-dev":
-        raise RuntimeError("insecure default SECRET_KEY in non-dev; configure SIGNING_KEYS_JSON or use KeyManager")
+        raise RuntimeError("insecure default SECRET_KEY in non-dev; configure signing keys")
+    # require REVOCATION_HMAC_KEY presence (enforced in revocation module)
+    from server.api.utils.revocation import REVOCATION_HMAC_KEY
+    if not REVOCATION_HMAC_KEY:
+        raise RuntimeError("REVOCATION_HMAC_KEY must be set in non-dev environments")
 
 def _new_jti() -> str:
     return str(uuid.uuid4())
@@ -58,7 +63,27 @@ def _new_jti() -> str:
 def _now() -> int:
     return int(time.time())
 
-# Centralized decode helper using KeyManager
+def _resolve_key(kid: Optional[str]) -> str:
+    # prefer KeyManager cached keys
+    key = _key_manager.get_key(kid)
+    if key:
+        return key
+    # fallback to KMS adapter
+    try:
+        kms_secret = get_secret_from_kms(kid) if kid else None
+        if kms_secret:
+            # cache into key manager for runtime
+            try:
+                _key_manager.add_key(kid, kms_secret, make_preferred=False)
+            except Exception:
+                pass
+            return kms_secret
+    except Exception:
+        pass
+    # final fallback
+    return LEGACY_SECRET
+
+# Centralized decode helper
 def decode_token(token: str, verify_exp: bool = True, expected_typ: Optional[str] = None) -> Optional[Dict[str, Any]]:
     if not token:
         return None
@@ -69,7 +94,7 @@ def decode_token(token: str, verify_exp: bool = True, expected_typ: Optional[str
         return None
 
     kid = header.get("kid")
-    key = _key_manager.get_key(kid) or LEGACY_SECRET
+    key = _resolve_key(kid) or LEGACY_SECRET
     options = {"verify_exp": verify_exp}
 
     try:
@@ -92,7 +117,7 @@ def decode_token(token: str, verify_exp: bool = True, expected_typ: Optional[str
 
     return payload
 
-# Signing helper with kid header via KeyManager
+# Signing helper with kid header
 def sign_jwt(claims: Dict[str, Any], ttl: Optional[int] = None, kid: Optional[str] = None) -> str:
     payload = dict(claims)
     now = _now()
@@ -103,7 +128,7 @@ def sign_jwt(claims: Dict[str, Any], ttl: Optional[int] = None, kid: Optional[st
         payload["exp"] = now + ACCESS_TTL
 
     chosen_kid = kid or _key_manager.get_preferred() if hasattr(_key_manager, "get_preferred") else None
-    key = _key_manager.get_key(chosen_kid) or LEGACY_SECRET
+    key = _resolve_key(chosen_kid) or LEGACY_SECRET
     headers = {}
     if chosen_kid:
         headers["kid"] = chosen_kid
@@ -176,15 +201,25 @@ def rotate_refresh_token_and_issue_pair(old_refresh_token: str, requester_payloa
     chain_issued_at = old_claims.get("chain_issued_at")
     now = _now()
 
+    # Server-authoritative chain meta check
+    meta = None
+    if chain_id:
+        meta = get_chain_meta(chain_id)
+        if not meta:
+            write_log({"event": "chain_meta_missing_or_invalid", "chain_id": chain_id, "jti": old_jti})
+            try:
+                revocation_revoke_chain(old_jti, initiator={"role": "system", "reason": "chain_meta_invalid"})
+            except Exception:
+                pass
+            raise ValueError("refresh_denied_chain_meta_invalid")
+        # prefer server-stored issued_at
+        try:
+            chain_issued_at = int(meta.get("chain_issued_at"))
+        except Exception:
+            pass
+
     # Enforce chain TTL
     if ENFORCE_CHAIN_TTL:
-        if chain_id:
-            meta = get_chain_meta(chain_id)
-            if meta and "chain_issued_at" in meta:
-                try:
-                    chain_issued_at = int(meta.get("chain_issued_at"))
-                except Exception:
-                    chain_issued_at = chain_issued_at
         if chain_issued_at and (chain_issued_at + MAX_CHAIN_LIFETIME_SECONDS) < now:
             write_log({
                 "event": "refresh_denied_chain_ttl",
@@ -202,11 +237,9 @@ def rotate_refresh_token_and_issue_pair(old_refresh_token: str, requester_payloa
                     pass
                 origin_jti = None
                 try:
-                    origin_meta = meta or get_chain_meta(chain_id)
-                    origin_jti = origin_meta.get("origin_jti") if origin_meta else None
+                    origin_jti = meta.get("origin_jti") if meta else None
                 except Exception:
                     origin_jti = None
-
                 try:
                     revocation_revoke_chain(origin_jti or old_jti, initiator={"role": "system", "reason": "chain_ttl_exceeded"})
                 except Exception as e:
@@ -261,9 +294,8 @@ def rotate_refresh_token_and_issue_pair(old_refresh_token: str, requester_payloa
 
     return access_token, new_refresh_token, new_refresh_claims
 
-# Public flow that validates and rotates refresh token
+# Public refresh flow
 def refresh_token_flow(refresh_token: str, requester_payload: Optional[Dict[str, Any]] = None) -> Tuple[str, str]:
-    # Use centralized decode to verify expiry and typ before checks
     payload = decode_token(refresh_token, verify_exp=True, expected_typ="refresh")
     if not payload:
         write_log({"event": "refresh_attempt_invalid_or_expired", "token_snippet": (refresh_token or "")[:48]})
@@ -273,14 +305,17 @@ def refresh_token_flow(refresh_token: str, requester_payload: Optional[Dict[str,
     chain_id = payload.get("chain_id")
     subject = payload.get("sub")
 
-    # Atomic one-time-use check: attempt to consume jti atomically
+    # Revoked check
     try:
-        from server.api.utils.revocation import is_revoked as rev_is_revoked
-
-        if rev_is_revoked(jti):
+        if is_revoked(jti):
             write_log({"event": "refresh_attempt_revoked", "jti": jti, "sub": subject})
             raise ValueError("refresh_token_revoked")
+    except Exception as e:
+        write_log({"event": "revocation_check_error", "error": str(e), "jti": jti})
+        raise ValueError("revocation_backend_error")
 
+    # Atomic one-time-use consume (Redis Lua or file fallback)
+    try:
         consumed = consume_jti_atomically(jti)
         if not consumed:
             write_log({"event": "refresh_attempt_reuse_or_race", "jti": jti, "sub": subject})
@@ -295,12 +330,12 @@ def refresh_token_flow(refresh_token: str, requester_payload: Optional[Dict[str,
         write_log({"event": "revocation_check_error", "error": str(e), "jti": jti})
         raise ValueError("revocation_backend_error")
 
-    # Proceed to rotate; rotate_refresh_token_and_issue_pair will enforce chain TTL and produce new tokens
+    # Proceed to rotation (this will check server meta TTL and produce tokens)
     access_token, new_refresh_token, _ = rotate_refresh_token_and_issue_pair(refresh_token, requester_payload=requester_payload)
 
     return access_token, new_refresh_token
 
-# Backwards-compat helper to expose has_scope used by permissions module
+# Scope helper
 def has_scope(payload: Dict[str, Any], required_scope: Optional[str]) -> bool:
     if not required_scope:
         return True

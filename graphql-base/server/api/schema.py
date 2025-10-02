@@ -1,55 +1,45 @@
 # server/api/schema.py
-# Centralized SDL for the GraphQL schema used by make_executable_schema
+"""
+GraphQL SDL exported as a Python string named type_defs.
+The application imports this module and expects type_defs to be available.
+Edit the SDL below to add/remove types or fields.
+"""
 
 type_defs = """
-scalar DateTime
-scalar JSON
-
-type TokenPair {
-  access_token: String!
-  refresh_token: String!
-  token_type: String!
-  expires_at: DateTime!
-  expires_in: Int!
-  issued_at: DateTime!
-  user_id: String!
-  scope: String!
-  trace_id: String!
-}
-
-type Me {
-  user_id: String!
-  scope: String!
-  issued_at: DateTime
-  trace_id: String
-  role: String
+schema {
+  query: Query
+  mutation: Mutation
 }
 
 type Query {
+  health: String!
+  me: User
   ping: String!
-  me: Me
+}
+
+type User {
+  sub: String
+  role: String
+  scope: String
+  email: String
+}
+
+type AuthTokens {
+  accessToken: String!
+  refreshToken: String!
 }
 
 type Mutation {
-  login(username: String!, password: String!, code_challenge: String, code_challenge_method: String): TokenPair
-  refreshToken(refresh_token: String!, code_verifier: String): TokenPair
-  logout: Boolean
-  revokeToken(token: String!): Boolean
-  revokeRotationChain(jti: String!): [String!]!
+  login(username: String!, password: String!): AuthTokens!
+  refreshToken(token: String!): AuthTokens!
+  logout(token: String!): Boolean!
+  revokeToken(token: String!): Boolean!
+  revokeRotationChain(startJti: String!): Boolean!
   adminOnly: String
-  introspectToken(token: String!): IntrospectionResult
-}
+  introspectToken(token: String!): String
 
-type IntrospectionResult {
-  valid: Boolean!
-  token_type: String
-  payload: JSON
-  revoked: Boolean!
-  used: Boolean!
-  rotated: Boolean!
-  lineage: [String!]!
-  issued_at: DateTime
-  expires_at: DateTime
-  reason: String
+  # Admin key management (requires admin privileges)
+  adminRotateKey(newKid: String!, newKeyMaterial: String!, makePreferred: Boolean = true): Boolean!
+  retireKid(kid: String!): Boolean!
 }
 """

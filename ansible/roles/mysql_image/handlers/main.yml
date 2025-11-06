@@ -1,0 +1,4 @@
+---
+- name: image_built
+  ansible.builtin.debug:
+    msg: "Built image {{ image_name }}"

@@ -1,0 +1,41 @@
+---
+# - hosts: localhost
+#   connection: local
+#   gather_facts: false
+#   roles:
+#     - role: podman_common
+#       vars:
+#         task_needed: "requirements"
+#         podman_common_req_strategy: "merge"
+#         podman_common_require_roles:
+#           - mysql_image
+#           - mysql_run
+#           - mysql_container
+#           - podman_common
+#         podman_common_run_galaxy: true
+#         podman_common_galaxy_roles_path: "{{ playbook_dir }}/roles"
+#         podman_common_galaxy_collections_path: "{{ playbook_dir }}/.ansible_collections"
+
+    # vars:
+    #   podman_common_req_strategy: merge
+    #   podman_common_require_roles: [ mysql_container, mysql_image, mysql_run, podman_common ]
+    #   podman_common_run_galaxy: true
+
+
+- name: Build and run MySQL container with generated CA/certs
+  hosts: localhost
+  connection: local
+  vars_files:
+    - ../local_vars.yml
+  gather_facts: true
+  roles:
+    - role: mysql_container
+      vars:
+        mysql_root_password: "project_pass"
+        mysql_user: "project_root"
+        mysql_db: "graphql"
+        image_name: "my-mariadb:12.0.2"
+        container_name: "my-mysql-bootstrap"
+        install_host_ca: false
+
+  

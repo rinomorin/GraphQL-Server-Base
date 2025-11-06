@@ -1,6 +1,10 @@
 # server/api/handlers/auth_handlers.py
+import json
+import os
 from typing import Optional, Dict, Any, Tuple
 from datetime import datetime, timezone
+
+import bcrypt
 from flask import Request
 
 from server.api.auth.token import (
@@ -12,6 +16,9 @@ from server.api.auth.token import (
 from server.api.utils.logger import write_log, revoke_token, revoke_rotation_chain_atomic
 from server.api.permissions import log_mutation, require_mutation_scope, allow_mutation
 
+# Path to users DB JSON file; set USERS_DB_PATH env var or replace default with absolute path
+USERS_DB_PATH = os.environ.get("USERS_DB_PATH", "/etc/myapp/users.db")
+
 # Helpers to extract bearer token and caller payload from GraphQL context
 def _caller_payload_from_info(info) -> Optional[Dict[str, Any]]:
     ctx = getattr(info, "context", {}) or {}
@@ -21,22 +28,68 @@ def _caller_payload_from_info(info) -> Optional[Dict[str, Any]]:
     payload = decode_token(token, verify_exp=True)
     return payload
 
-# Resolver: login
+# Helpers to load and verify users from a JSON users.db
+def _load_user_record(username: str) -> Optional[Dict[str, Any]]:
+    try:
+        with open(USERS_DB_PATH, "r", encoding="utf-8") as f:
+            db = json.load(f)
+    except Exception:
+        return None
+
+    # Top-level keyed by username
+    rec = db.get(username)
+    if rec and isinstance(rec, dict):
+        if "username" not in rec:
+            rec["username"] = username
+        return rec
+
+    # Or find by internal username field
+    for key, rec in db.items():
+        if isinstance(rec, dict) and rec.get("username") == username:
+            return rec
+
+    return None
+
+def _verify_password(hashed_password: str, password: str) -> bool:
+    try:
+        return bcrypt.checkpw(password.encode("utf-8"), hashed_password.encode("utf-8"))
+    except Exception:
+        return False
+
+# Resolver: login (replaced to consult users.db and verify bcrypt)
 def resolve_login(_, info, username: str, password: str, code_challenge: Optional[str] = None, code_challenge_method: Optional[str] = None):
     """
-    Authenticate user (stubbed). On success return access+refresh pair.
-    Replace the auth check with your real credential backend.
+    Authenticate user against users.db and return a full OAuth-style session object.
     """
-    # Simple credential stub for local/dev; replace with real auth backend
-    if username != "admin" and username != "user":
+    user_rec = _load_user_record(username)
+    if not user_rec:
         log_mutation({"sub": username}, "login", "failed", "unknown_user")
         raise Exception("authentication_failed")
 
-    # In a real system verify password, check MFA, etc.
-    role = "admin" if username == "admin" else "user"
-    scope = "admin:introspect user:refresh" if role == "admin" else "user:refresh read:profile"
+    hashed = user_rec.get("hashed_password") or user_rec.get("password_hash") or user_rec.get("password")
+    if not hashed or not _verify_password(hashed, password):
+        log_mutation({"sub": username}, "login", "failed", "bad_credentials")
+        raise Exception("authentication_failed")
+
+    roles = user_rec.get("roles", [])
+    role = "admin" if "admin" in roles else (roles[0] if roles else "user")
+    scope = "admin:introspect user:refresh" if "admin" in roles else "user:refresh read:profile"
 
     access_token, refresh_token, refresh_claims = create_token_pair(subject=username, scope=scope, role=role)
+
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    issued_at = None
+    access_expires_at = None
+    access_expires_in = None
+    try:
+        access_claims = decode_token(access_token, verify_exp=False)
+        if isinstance(access_claims, dict):
+            issued_at = access_claims.get("iat")
+            access_expires_at = access_claims.get("exp")
+            if isinstance(access_expires_at, int):
+                access_expires_in = max(0, access_expires_at - now_ts)
+    except Exception:
+        issued_at = now_ts
 
     log_mutation({"sub": username, "role": role}, "login", "success")
     write_log({
@@ -46,15 +99,27 @@ def resolve_login(_, info, username: str, password: str, code_challenge: Optiona
         "issued_at": datetime.now(timezone.utc).isoformat()
     }, stream=role)
 
+    # Return camelCase fields to match schema; also include snake_case for backwards compatibility
     return {
+        "accessToken": access_token,
+        "refreshToken": refresh_token,
+        "tokenType": "Bearer",
+        "issuedAt": issued_at,
+        "expiresAt": access_expires_at,
+        "expiresIn": access_expires_in,
+        "scope": scope,
+        "role": role,
+        "userId": user_rec.get("id") or user_rec.get("user_id") or username,
+        "chainId": refresh_claims.get("chain_id"),
+
+        # backwards-compatible keys
         "access_token": access_token,
         "refresh_token": refresh_token,
-        "token_type": "bearer",
-        "expires_at": refresh_claims.get("exp"),
-        "expires_in": None,
-        "issued_at": refresh_claims.get("iat"),
-        "user_id": username,
-        "scope": scope
+        "token_type": "Bearer",
+        "issued_at": issued_at,
+        "expires_at": access_expires_at,
+        "expires_in": access_expires_in,
+        "user_id": user_rec.get("id") or user_rec.get("user_id") or username,
     }
 
 # Resolver: refreshToken
@@ -98,8 +163,6 @@ def resolve_logout(_, info):
         log_mutation({}, "logout", "denied", "unauthenticated")
         raise Exception("unauthenticated")
 
-    # Ideally the client sends the refresh token to be revoked; here we attempt best-effort
-    # If the context included a token, try to revoke it by jti
     token = info.context.get("token")
     jti = None
     if token:
@@ -128,7 +191,6 @@ def resolve_revoke_token(_, info, token: str):
         log_mutation(caller_payload, "revokeToken", "denied", "insufficient_permissions")
         raise Exception("forbidden")
 
-    # Try to extract jti for reliable revocation
     target_payload = decode_token(token, verify_exp=False)
     jti = target_payload.get("jti") if isinstance(target_payload, dict) else None
 
@@ -169,4 +231,58 @@ def resolve_me(_, info):
         "issued_at": caller_payload.get("iat"),
         "trace_id": caller_payload.get("trace_id"),
         "role": caller_payload.get("role")
+    }
+
+# Resolver: authSession (new)
+def resolve_auth_session(_, info):
+    """
+    Return an auth session object. Uses current auth context from info.context["token"].
+    Only returns refresh token when caller is authorized (allow_mutation + require_mutation_scope).
+    This issues a fresh token pair for the session metadata; replace with stored tokens if you track them server-side.
+    """
+    ctx = getattr(info, "context", {}) or {}
+    caller_payload = _caller_payload_from_info(info)
+    if not caller_payload:
+        return None
+
+    subject = caller_payload.get("sub")
+    scope = caller_payload.get("scope", "") or ""
+    role = caller_payload.get("role")
+
+    access_token, refresh_token, refresh_claims = create_token_pair(subject=subject, scope=scope, role=role)
+
+    issued_at = refresh_claims.get("iat")
+    refresh_exp = refresh_claims.get("exp")
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+
+    can_receive_refresh = False
+    try:
+        can_receive_refresh = allow_mutation(caller_payload, "refreshToken") and require_mutation_scope(caller_payload, "refreshToken")
+    except Exception:
+        can_receive_refresh = False
+
+    access_expires_at = None
+    access_expires_in = None
+    try:
+        access_claims = decode_token(access_token, verify_exp=False)
+        if isinstance(access_claims, dict):
+            access_expires_at = access_claims.get("exp")
+            if isinstance(access_expires_at, int):
+                access_expires_in = max(0, access_expires_at - now_ts)
+    except Exception:
+        access_expires_at = None
+        access_expires_in = None
+
+    return {
+        "accessToken": access_token,
+        "tokenType": "Bearer",
+        "issuedAt": issued_at,
+        "expiresAt": access_expires_at,
+        "expiresIn": access_expires_in,
+        "scope": scope,
+        "role": role,
+        "refreshToken": refresh_token if can_receive_refresh else None,
+        "refreshExpiresAt": refresh_exp,
+        "refreshExpiresIn": (refresh_exp - now_ts) if isinstance(refresh_exp, int) else None,
+        "chainId": refresh_claims.get("chain_id"),
     }

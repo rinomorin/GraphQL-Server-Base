@@ -1,0 +1,129 @@
+# - name: Ensure podman is installed
+#   ansible.builtin.package:
+#     name: podman
+#     state: present
+
+- name: Ensure host CA destination exists
+  ansible.builtin.file:
+    path: "{{ host_ca_dest }}"
+    state: directory
+    owner: "{{ ansible_user_id }}"
+    mode: "0755"
+
+- name: Create podman volumes (when using named volumes)
+  when: use_named_volumes | default(true)
+  ansible.builtin.command: >
+    podman volume create {{ item.name }}
+  loop: "{{ podman_volumes }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: volume_create
+  changed_when: "'Created' in volume_create.stdout"
+
+- name: Normalize host_bind_paths variable
+  set_fact:
+    host_bind_paths: "{{ host_bind_paths | default([]) }}"
+
+- name: Build podman_mounts from host_bind_paths when provided
+  when: host_bind_paths | length > 0
+  set_fact:
+    podman_mounts: "{{ host_bind_paths }}"
+
+- name: Build podman_mounts from named volumes when host binds not provided
+  when: host_bind_paths | length == 0
+  set_fact:
+    podman_mounts: "{{ podman_volumes | map(attribute='name') | zip(podman_volumes | map(attribute='mount')) | map('join', ':') | list }}"
+
+- name: Remove existing container if present
+  ansible.builtin.shell: >
+    podman rm -f {{ container_name }} || true
+  changed_when: false
+
+- name: Start MySQL container
+  ansible.builtin.shell: >
+    podman run --name {{ container_name }} -d \
+    -e MYSQL_ROOT_PASSWORD="{{ mysql_root_password }}" \
+    -e MYSQL_USER="{{ mysql_user }}" \
+    -e MYSQL_DATABASE="{{ mysql_db }}" \
+    -p 3306:3306 \
+    {% for mount in podman_mounts %}-v {{ mount }} {% endfor %} \
+    {{ image_name }}
+  register: start_result
+  changed_when: start_result.rc == 0
+
+- name: Wait for MySQL port ready
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 3306
+    delay: 1
+    timeout: 60
+
+- name: Create temporary container to access certs (when using named volumes)
+  when: use_named_volumes | default(true)
+  ansible.builtin.shell: >
+    podman run --name {{ container_name }}-copy -d \
+    --entrypoint sleep \
+    -v {{ podman_volumes[1].name }}:{{ podman_volumes[1].mount }} \
+    {{ image_name }} infinity
+  register: certs_copy_container
+  changed_when: certs_copy_container.rc == 0
+
+- name: Copy mysql_server_bundle.pem to host_ca_dest (when using named volumes)
+  when: use_named_volumes | default(true)
+  ansible.builtin.command: >
+    podman cp {{ container_name }}-copy:{{ podman_volumes[1].mount }}/mysql_server_bundle.pem {{ host_ca_dest }}/mysql_server_bundle.pem
+  register: cp_bundle
+  changed_when: cp_bundle.rc == 0
+
+- name: Copy root_ca.crt.pem to host_ca_dest (when using named volumes)
+  when: use_named_volumes | default(true)
+  ansible.builtin.command: >
+    podman cp {{ container_name }}-copy:{{ podman_volumes[1].mount }}/root_ca.crt.pem {{ host_ca_dest }}/root_ca.crt.pem
+  register: cp_root
+  changed_when: cp_root.rc == 0
+
+- name: Stop and remove temp copy container (when created)
+  when: use_named_volumes | default(true)
+  ansible.builtin.shell: >
+    podman rm -f {{ container_name }}-copy || true
+  changed_when: false
+
+- name: Ensure copied CA exists
+  ansible.builtin.stat:
+    path: "{{ host_ca_dest }}/root_ca.crt.pem"
+  register: host_ca_stat
+
+- name: Install root CA into host trust (optional)
+  when: install_host_ca and host_ca_stat.stat.exists
+  block:
+    - name: Copy CA into system trust anchors
+      become: true
+      ansible.builtin.copy:
+        src: "{{ host_ca_dest }}/root_ca.crt.pem"
+        dest: /etc/pki/ca-trust/source/anchors/mysql_root_ca.crt
+        owner: root
+        mode: '0644'
+
+    - name: Update system trust store
+      become: true
+      ansible.builtin.command: update-ca-trust extract
+
+- name: Show run info
+  ansible.builtin.debug:
+    msg:
+      - "Container: {{ container_name }} (image {{ image_name }})"
+      - "Mounts used: {{ podman_mounts }}"
+      - "Volumes: {{ podman_volumes | map(attribute='name') | list }}"
+      - "Host CA path: {{ host_ca_dest }}/root_ca.crt.pem (exists={{ host_ca_stat.stat.exists }})"
+
+
+- name: Test MySQL connection from localhost
+  ansible.builtin.shell: >
+    mysql -h 127.0.0.1 -P 3306 -u{{ mysql_user }} -p{{ mysql_root_password }} -e "SELECT VERSION();" {{ mysql_db }}
+  register: mysql_test
+  changed_when: false
+  failed_when: mysql_test.rc != 0
+
+- name: Show MySQL connection test result
+  ansible.builtin.debug:
+    var: mysql_test.stdout_lines

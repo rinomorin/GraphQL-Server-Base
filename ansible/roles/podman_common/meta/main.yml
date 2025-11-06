@@ -1,0 +1,16 @@
+# ---
+# galaxy_info:
+#   author: Rino Morin
+#   description: Common Podman utilities used by container roles (create volumes, install podman, pull images)
+#   license: MIT
+#   min_ansible_version: "2.12"
+#   platforms:
+#     - name: rockylinux
+#       versions:
+#         - "8"
+#         - "9"
+# dependencies: []
+---
+dependencies: []
+collections:
+  - containers.podman

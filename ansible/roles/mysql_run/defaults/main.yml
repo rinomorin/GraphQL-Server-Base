@@ -1,0 +1,17 @@
+---
+container_name: my-mysql-bootstrap
+image_name: my-mysql:8
+podman_volumes:
+  - name: mysql_data
+    mount: /var/lib/mysql
+  - name: mysql_certs
+    mount: /etc/mysql_certs
+mysql_root_password: "project_pass"
+mysql_user: "project_root"
+mysql_db: "graphql"
+
+host_ca_dest: /opt/mysql_certs
+install_host_ca: false
+use_named_volumes: true
+# default empty list; override via ansible/local_vars.yml or play vars to use host binds
+host_bind_paths: []

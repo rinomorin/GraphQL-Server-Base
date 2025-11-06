@@ -1,0 +1,7 @@
+---
+- name: Build MySQL image with podman
+  ansible.builtin.command: >
+    podman build --pull={{ podman_pull | ternary('always', 'never') }} -t {{ image_name }} {{ build_context }}
+  register: podman_build
+  changed_when: "'Successfully tagged' in podman_build.stdout"
+  notify: image_built

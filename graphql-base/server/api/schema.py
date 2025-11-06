@@ -1,10 +1,4 @@
 # server/api/schema.py
-"""
-GraphQL SDL exported as a Python string named type_defs.
-The application imports this module and expects type_defs to be available.
-Edit the SDL below to add/remove types or fields.
-"""
-
 type_defs = """
 schema {
   query: Query
@@ -15,6 +9,7 @@ type Query {
   health: String!
   me: User
   ping: String!
+  authSession: AuthSession
 }
 
 type User {
@@ -24,13 +19,31 @@ type User {
   email: String
 }
 
+# keep AuthTokens for simple token-only responses if needed
 type AuthTokens {
   accessToken: String!
   refreshToken: String!
 }
 
+# New richer session type returned by login
+type AuthSession {
+  accessToken: String!
+  refreshToken: String
+  tokenType: String!
+  issuedAt: Int
+  expiresAt: Int
+  expiresIn: Int
+  scope: String
+  role: String
+  userId: String
+  chainId: String
+}
+
 type Mutation {
-  login(username: String!, password: String!): AuthTokens!
+  # login now returns the richer AuthSession
+  login(username: String!, password: String!): AuthSession!
+
+  # keep token lifecycle mutations
   refreshToken(token: String!): AuthTokens!
   logout(token: String!): Boolean!
   revokeToken(token: String!): Boolean!
@@ -38,7 +51,6 @@ type Mutation {
   adminOnly: String
   introspectToken(token: String!): String
 
-  # Admin key management (requires admin privileges)
   adminRotateKey(newKid: String!, newKeyMaterial: String!, makePreferred: Boolean = true): Boolean!
   retireKid(kid: String!): Boolean!
 }

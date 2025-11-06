@@ -1,0 +1,10 @@
+---
+# Default variables for podman_common role
+podman_package: podman
+podman_service_name: podman
+podman_user: "{{ ansible_user_id }}"
+podman_group: "{{ ansible_user_gid | default(ansible_user_id) }}"
+podman_volumes: []          # list of dicts: { name: <name>, labels: <dict> (optional) }
+podman_pull_images: []      # list of image names to pull, e.g. ["registry.example/foo:latest"]
+selinux_relabel: false      # when true, add :Z to bind mounts or run restorecon
+ensure_rootless: true       # if true, prepare user namespaces for rootless podman where relevant

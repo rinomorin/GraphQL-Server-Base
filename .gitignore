@@ -31,6 +31,13 @@ coverage
 # Bower dependency directory (https://bower.io/)
 bower_components
 
+
+
+
+
+
+
+
 # node-waf configuration
 .lock-wscript
 
@@ -146,3 +153,7 @@ venv312/
 # python
 **/__pycache__/
 
+# local host bind mounts and secrets (do not commit)
+/dockers/
+/ansible/roles/*/files/.local_vars.yml
+ansible/local_vars.yml

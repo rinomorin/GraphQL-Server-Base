@@ -1,0 +1,7 @@
+---
+galaxy_info:
+  author: yourname
+  description: Start MySQL container, extract certs to host and optionally install root CA
+  license: MIT
+  min_ansible_version: "2.12"
+dependencies: []

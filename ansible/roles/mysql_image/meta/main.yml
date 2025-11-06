@@ -1,0 +1,7 @@
+---
+galaxy_info:
+  author: yourname
+  description: Build MySQL container image that generates CA and server certs
+  license: MIT
+  min_ansible_version: "2.12"
+dependencies: []

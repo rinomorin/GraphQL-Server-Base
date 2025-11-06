@@ -1,0 +1,152 @@
+# - name: Ensure podman is installed
+
+#   ansible.builtin.package:
+#     name: podman
+#     state: present
+- name: Show real path of host_ca_dest
+  ansible.builtin.command: realpath "{{ host_ca_dest }}"
+  register: resolved_path
+  changed_when: false
+
+- name: Show resolved path
+  ansible.builtin.debug:
+    var: resolved_path.stdout
+
+- name: Set host_ca_dest
+  set_fact:
+    host_ca_dest: "{{ resolved_path.stdout}}"
+
+- name: show volume path
+  debug:
+    msg: "host_ca_dest {{ host_ca_dest }}"
+    
+- name: Ensure host CA destination exists
+  ansible.builtin.file:
+    path: "{{ host_ca_dest }}"
+    state: directory
+    owner: "{{ ansible_user_id }}"
+    mode: "0755"
+
+- name: Check if podman volume exists
+  ansible.builtin.command: podman volume inspect {{ item.name }}
+  register: volume_check
+  changed_when: false
+  failed_when: false
+  loop: "{{ podman_volumes }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Zip podman_volumes with inspect results
+  set_fact:
+    podman_volume_status: "{{ podman_volumes | zip(volume_check.results) | list }}"
+
+
+- name: Create podman volume if missing
+  ansible.builtin.command: podman volume create {{ item.0.name }}
+  when: item.1.rc != 0
+  loop: "{{ podman_volume_status }}"
+  loop_control:
+    label: "{{ item.0.name }}"
+  register: volume_create
+  changed_when: "'Created' in volume_create.stdout"
+
+- name: Build MySQL image with podman
+  ansible.builtin.command: >
+    podman build --pull={{ podman_pull | ternary('always', 'never') }} -t {{ image_name }} {{ role_path }}/files
+  register: build_out
+  changed_when: "'Successfully tagged' in build_out.stdout"
+
+- name: Remove any existing bootstrap container
+  ansible.builtin.shell: >
+    podman rm -f {{ container_name }} || true
+  changed_when: false
+
+- name: Run container to initialize DB and generate certs (detached)
+  ansible.builtin.shell: >
+    podman run --name {{ container_name }} -d \
+    -e MYSQL_ROOT_PASSWORD="{{ mysql_root_password }}" \
+    -e MYSQL_USER="{{ mysql_user }}" \
+    -e MYSQL_DATABASE="{{ mysql_db }}" \
+    -p 3306:3306 \
+    -v {{ podman_volumes[0].name }}:{{ podman_volumes[0].mount }} \
+    -v {{ podman_volumes[1].name }}:{{ podman_volumes[1].mount }} \
+    {{ image_name }}
+  register: svc_run
+  changed_when: svc_run.rc == 0
+
+- name: Wait for MySQL port to be ready (up to 60s)
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 3306
+    delay: 1
+    timeout: 60
+
+- name: Pause briefly to ensure bootstrap actions complete
+  ansible.builtin.pause:
+    seconds: 3
+
+- name: Create temporary container to extract certs
+  ansible.builtin.shell: >
+    podman run --name {{ container_name }}-copy -d \
+    --entrypoint sleep \
+    -v {{ podman_volumes[1].name }}:{{ podman_volumes[1].mount }} \
+    {{ image_name }} infinity
+  register: copy_run
+  changed_when: copy_run.rc == 0
+
+- name: Copy root CA from container to host folder
+  ansible.builtin.command: >
+    podman cp {{ container_name }}-copy:{{ podman_volumes[1].mount }}/root_ca.crt.pem {{ host_ca_dest }}/root_ca.crt.pem
+  register: cp_out
+  changed_when: "'root_ca.crt.pem' in cp_out.stdout or cp_out.rc == 0"
+
+- name: Stop and remove temp copy container
+  ansible.builtin.shell: >
+    podman rm -f {{ container_name }}-copy || true
+  changed_when: false
+
+- name: Ensure copied CA exists
+  ansible.builtin.stat:
+    path: "{{ host_ca_dest }}/root_ca.crt.pem"
+  register: host_ca_stat
+
+- name: Install root CA into host trust (optional)
+  when: install_host_ca and host_ca_stat.stat.exists
+  block:
+    - name: Copy CA into system trust anchors
+      ansible.builtin.copy:
+        src: "{{ host_ca_dest }}/root_ca.crt.pem"
+        dest: /etc/pki/ca-trust/source/anchors/mysql_root_ca.crt
+        owner: root
+        mode: '0644'
+      become: true
+
+    - name: Update system trust store
+      ansible.builtin.command: update-ca-trust extract
+      become: true
+
+- name: Show info
+  ansible.builtin.debug:
+    msg:
+      - "Image built: {{ image_name }}"
+      - "Podman volumes: {{ podman_volumes | map(attribute='name') | list }}"
+      - "Root CA copied to: {{ host_ca_dest }}/root_ca.crt.pem (exists={{ host_ca_stat.stat.exists }})"
+      - "MySQL root password: {{ mysql_root_password | default('<<not-set>>') }}"
+
+- name: Run mariadb TLS login inside container
+  ansible.builtin.command: >
+    podman exec {{ container_name }} bash -c '
+    mariadb \
+      --ssl \
+      --ssl-ca={{ cert_dir }}/mysql_server_bundle.pem \
+      --ssl-cert={{ cert_dir }}/client.crt.pem \
+      --ssl-key={{ cert_dir }}/client.key.pem \
+      -uroot -p{{ mysql_root_password }} \
+      -h 127.0.0.1
+    '
+  register: tls_login
+  ignore_errors: true
+
+- name: Show TLS login result
+  debug:
+    var: tls_login.stdout

@@ -1,0 +1,48 @@
+FROM mariadb:12.0.2
+
+LABEL maintainer="rino@morinsoft.ca"
+
+# 🧩 Environment variables (override-ready)
+ENV MYSQL_ROOT_PASSWORD=One2LoadT00~
+ENV REMOTE_TLS_USER=remote_tls
+ENV REMOTE_TLS_PASSWORD=SecureTLSPass
+ENV MYSQL_DATA=/var/lib/mysql
+ENV CERT_DIR=/etc/mysql_certs
+
+# 🔧 Switch to root for privileged setup
+USER root
+
+# 🧼 Install OpenSSL (MariaDB already included in base image)
+RUN apt-get update && apt-get install -y \
+    openssl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 🔧 Create cert and data directories with secure permissions
+RUN mkdir -p "${MYSQL_DATA}" "${CERT_DIR}" && \
+    chown mysql:mysql "${MYSQL_DATA}" "${CERT_DIR}" && \
+    chmod 700 "${MYSQL_DATA}" "${CERT_DIR}"
+
+# 📦 Add bootstrap and cert generation scripts
+COPY root-entrypoint.sh /usr/local/bin/root-entrypoint.sh
+COPY generate_ca.sh /usr/local/bin/generate_ca.sh
+
+RUN chmod +x /usr/local/bin/*.sh && \
+    chown mysql:mysql /usr/local/bin/*.sh
+
+# 🔧 Switch to rootless user for runtime
+USER mysql
+WORKDIR /home/mysql
+
+# 🔐 Optional: preload CN identity for cert generation
+ARG CLIENT_CN=MorinSoft
+ENV CLIENT_CN=${CLIENT_CN}
+
+# 🚪 Expose MariaDB port
+EXPOSE 3306
+
+# 💾 Persist both data and certs
+VOLUME ["${MYSQL_DATA}", "${CERT_DIR}"]
+
+# 🚀 Entrypoint and default command
+ENTRYPOINT ["/usr/local/bin/root-entrypoint.sh"]
+CMD ["mariadbd"]

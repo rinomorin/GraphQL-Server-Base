@@ -1,0 +1,7 @@
+---
+- name: restart podman
+  become: true
+  ansible.builtin.service:
+    name: "{{ podman_service_name }}"
+    state: restarted
+    enabled: true

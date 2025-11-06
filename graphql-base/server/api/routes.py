@@ -47,9 +47,13 @@ def bind_resolvers():
         resolve_refresh_token,
         resolve_logout,
         resolve_revoke_token,
-        resolve_revoke_rotation_chain
+        resolve_revoke_rotation_chain,
+        resolve_auth_session,
     )
     from server.api.handlers.admin_handlers import resolve_admin_only
+
+    # Register Query resolvers (existing inline ones like ping/me are already set above)
+    query.set_field("authSession", resolve_auth_session)
 
     # Register mutation resolvers
     mutation.set_field("login", resolve_login)

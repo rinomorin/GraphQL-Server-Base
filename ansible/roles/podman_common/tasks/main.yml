@@ -1,0 +1,103 @@
+---
+- name: "install requirements"
+  ansible.builtin.include_tasks:
+    file: add_requirements.yml
+  when: task_needed == "requirements"
+  run_once: true
+
+- name: Ensure required collection present
+  ansible.builtin.meta: require_collection
+  args:
+    name: containers.podman
+
+- name: Install podman package
+  ansible.builtin.package:
+    name: "{{ podman_package }}"
+    state: present
+  notify: restart podman
+
+- name: Ensure rootless user namespaces are configured (if requested)
+  when: ensure_rootless | bool
+  block:
+    - name: Ensure /etc/subuid exists for user
+      ansible.builtin.lineinfile:
+        path: /etc/subuid
+        line: "{{ podman_user }}:100000:65536"
+        create: yes
+        state: present
+      become: true
+
+    - name: Ensure /etc/subgid exists for user
+      ansible.builtin.lineinfile:
+        path: /etc/subgid
+        line: "{{ podman_user }}:100000:65536"
+        create: yes
+        state: present
+      become: true
+
+- name: Create named podman volumes
+  podman_volume:
+    name: "{{ item.name }}"
+    state: present
+    labels: "{{ item.labels | default(omit) }}"
+  loop: "{{ podman_volumes }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Pull images proactively (optional)
+  when: podman_pull_images | length > 0
+  podman_image:
+    name: "{{ item }}"
+    state: present
+  loop: "{{ podman_pull_images }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Ensure host helper directories exist for bind mounts (if provided in volumes list)
+  when: podman_volumes | selectattr('hostpath', 'defined') | list | length > 0
+  ansible.builtin.file:
+    path: "{{ item.hostpath }}"
+    state: directory
+    owner: "{{ podman_user }}"
+    mode: "0755"
+  loop: "{{ podman_volumes | selectattr('hostpath', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.hostpath }}"
+
+- name: Optionally relabel host bind directories for SELinux
+  when: selinux_relabel | bool and (podman_volumes | selectattr('hostpath', 'defined') | list | length > 0)
+  become: true
+  ansible.builtin.command: restorecon -Rv "{{ item.hostpath }}"
+  loop: "{{ podman_volumes | selectattr('hostpath', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.hostpath }}"
+
+- name: Check if podman is available
+  ansible.builtin.command: podman info --format json
+  register: podman_raw_info
+  changed_when: false
+  failed_when: podman_raw_info.rc != 0
+  ignore_errors: true
+
+- debug:
+    msg: "{{podman_raw_info}}"
+    
+- name: Skip podman_info if podman is unavailable
+  when: podman_raw_info.rc == 0
+  containers.podman_pod_info:
+  .podman_pod_info:
+  register: podman_info
+  changed_when: false
+
+
+- name: Gather podman info for debug
+  containers.podman_info:
+  register: podman_info
+  changed_when: false
+
+- name: Expose podman info summary
+  ansible.builtin.debug:
+    msg:
+      - "Podman version: {{ podman_info.ociVersion | default('unknown') }}"
+      - "Rootless: {{ podman_info.rootless | default('unknown') }}"
+      - "Volumes present: {{ podman_volumes | map(attribute='name') | list }}"

@@ -1,0 +1,4 @@
+---
+image_name: my-mysql:8
+build_context: "{{ role_path }}/files"
+podman_pull: false

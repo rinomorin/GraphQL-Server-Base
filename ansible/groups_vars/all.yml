@@ -1,0 +1,12 @@
+---
+# global switches
+install_host_ca: false
+use_named_volumes: true   # if false, the play will use host bind paths from host_paths
+host_paths:
+  mysql_data: /opt/mysql_data
+  mysql_certs: /opt/mysql_certs
+
+# bootstrap DB and credentials
+mysql_root_password: "project_pass"
+mysql_user: "project_root"
+mysql_db: "graphql"

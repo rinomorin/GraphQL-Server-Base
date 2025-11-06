@@ -1,0 +1,15 @@
+---
+# roles/mysql_container/tasks/main.yml
+image_name: my-mysql:12
+container_name: my-mysql-bootstrap
+podman_volumes:
+  - name: mysql_data
+    mount: /var/lib/mysql
+  - name: mysql_certs
+    mount: /etc/mysql_certs
+host_ca_dest: "{{ playbook_dir }}/../../dockers/mysql_certs"
+install_host_ca: false
+podman_pull: false
+mysql_root_password: "project_pass"
+mysql_user: "project_root"
+mysql_db: "graphql"

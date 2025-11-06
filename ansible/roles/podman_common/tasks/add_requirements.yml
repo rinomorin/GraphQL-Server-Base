@@ -1,0 +1,321 @@
+
+---
+- name: Ensure required collection present
+  ansible.builtin.meta:
+    require_collection:
+      - community.general
+
+- name: Install podman package
+  ansible.builtin.package:
+    name: "{{ podman_package }}"
+    state: present
+  notify: restart podman
+
+- name: Ensure rootless user namespaces are configured (if requested)
+  when: ensure_rootless | bool
+  block:
+    - name: Ensure /etc/subuid contains mapping for podman_user
+      ansible.builtin.lineinfile:
+        path: /etc/subuid
+        line: "{{ podman_user }}:100000:65536"
+        create: yes
+      become: true
+
+    - name: Ensure /etc/subgid contains mapping for podman_user
+      ansible.builtin.lineinfile:
+        path: /etc/subgid
+        line: "{{ podman_user }}:100000:65536"
+        create: yes
+      become: true
+
+- name: Create named podman volumes
+  community.general.podman_volume:
+    name: "{{ item.name }}"
+    state: present
+    labels: "{{ item.labels | default(omit) }}"
+  loop: "{{ podman_volumes }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Pull images proactively (optional)
+  when: podman_pull_images | length > 0
+  community.general.podman_image:
+    name: "{{ item }}"
+    state: present
+  loop: "{{ podman_pull_images }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Ensure host helper directories exist for bind mounts (if provided)
+  when: podman_volumes | selectattr('hostpath', 'defined') | list | length > 0
+  ansible.builtin.file:
+    path: "{{ item.hostpath }}"
+    state: directory
+    owner: "{{ podman_user }}"
+    mode: "0755"
+  loop: "{{ podman_volumes | selectattr('hostpath', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.hostpath }}"
+
+- name: Optionally relabel host bind directories for SELinux
+  when: selinux_relabel | bool and (podman_volumes | selectattr('hostpath', 'defined') | list | length > 0)
+  become: true
+  ansible.builtin.command: restorecon -Rv "{{ item.hostpath }}"
+  loop: "{{ podman_volumes | selectattr('hostpath', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.hostpath }}"
+
+- name: Gather podman info for debug
+  community.general.podman_info:
+  register: podman_info
+  changed_when: false
+
+- name: Expose podman info summary
+  ansible.builtin.debug:
+    msg:
+      - "Podman version: {{ podman_info.ociVersion | default('unknown') }}"
+      - "Rootless: {{ podman_info.rootless | default('unknown') }}"
+      - "Volumes present: {{ podman_volumes | map(attribute='name') | list }}"
+
+#
+# New section: discover per-role requirements.yml files and install them
+#
+
+- name: Resolve roles_path list used by Ansible
+  ansible.builtin.set_fact:
+    _roles_search_paths: >-
+      {{
+        (lookup('ansible.builtin.env','ANSIBLE_ROLES_PATH') | default(''))
+        | default('')
+        | regex_replace(':+$','')
+        | regex_replace('^:','')
+      }}
+  changed_when: false
+
+- name: Build candidate roles paths fallback
+  ansible.builtin.set_fact:
+    _roles_candidate_paths: >-
+      {{
+        (
+          [
+            (playbook_dir | default(lookup('env','PWD')) + '/roles'),
+            (playbook_dir | default(lookup('env','PWD')) + '/ansible/roles'),
+            (playbook_dir | default(lookup('env','PWD')) + '/playbooks/roles'),
+            './roles',
+            './ansible/roles'
+          ]
+          + (_roles_search_paths | default('') | split(':') | default([]))
+        )
+        | unique
+      }}
+  changed_when: false
+
+- name: Debug roles candidate paths
+  ansible.builtin.debug:
+    var: _roles_candidate_paths
+  when: false
+
+- name: Find role directories among candidate paths
+  ansible.builtin.find:
+    paths: "{{ _roles_candidate_paths }}"
+    file_type: directory
+    depth: 2
+  register: found_role_dirs
+
+- name: Normalize discovered role names and directories
+  ansible.builtin.set_fact:
+    discovered_roles: >-
+      {{
+        found_role_dirs.files
+        | map(attribute='path')
+        | map('regex_replace','/+$','')
+        | map('basename','')
+        | zip(found_role_dirs.files | map(attribute='path'))
+        | list
+      }}
+  changed_when: false
+
+- name: Convert discovered_roles into dict entries (name -> path)
+  ansible.builtin.set_fact:
+    discovered_roles_map: >-
+      {{
+        dict(discovered_roles)
+      }}
+  changed_when: false
+
+- name: Compute list of roles to process
+  ansible.builtin.set_fact:
+    podman_common_req_target_roles: >-
+      {{
+        (podman_common_require_roles | default([]) | length > 0)
+          | ternary(
+              (podman_common_require_roles | map('string') | list),
+              (discovered_roles_map.keys() | list)
+            )
+      }}
+  changed_when: false
+
+- name: Build list of requirements files for target roles
+  ansible.builtin.set_fact:
+    podman_common_req_files: >-
+      {{
+        podman_common_req_target_roles
+        | map('extract', discovered_roles_map)
+        | map('regex_replace','/*$','')
+        | map('regex_replace','^','') 
+        | map('regex_replace','$','/requirements.yml')
+        | list
+      }}
+  changed_when: false
+
+- name: Also support requirements.yaml as alternative (add missing)
+  ansible.builtin.set_fact:
+    podman_common_req_files: >-
+      {{
+        podman_common_req_files
+        + (
+            podman_common_req_target_roles
+            | map('extract', discovered_roles_map)
+            | map('regex_replace','/*$','')
+            | map('regex_replace','^','')
+            | map('regex_replace','$','/requirements.yaml')
+            | list
+          )
+      }}
+  changed_when: false
+
+- name: Filter only files that actually exist
+  ansible.builtin.set_fact:
+    podman_common_req_files_existing: >-
+      {{
+        podman_common_req_files
+        | select('file', true)
+        | list
+      }}
+  changed_when: false
+
+- name: Slurp existing requirements files
+  when: podman_common_req_files_existing | length > 0
+  ansible.builtin.slurp:
+    src: "{{ item }}"
+  loop: "{{ podman_common_req_files_existing }}"
+  register: podman_common_slurped
+  loop_control:
+    label: "{{ item }}"
+
+- name: Parse slurped requirement documents into list
+  when: podman_common_slurped is defined
+  ansible.builtin.set_fact:
+    podman_common_parsed_reqs: >-
+      {{
+        podman_common_slurped.results
+        | map(attribute='content')
+        | map('b64decode')
+        | map('from_yaml')
+        | list
+      }}
+
+- name: Prepare merged requirements structure (collections & roles)
+  ansible.builtin.set_fact:
+    podman_common_merged:
+      collections: >-
+        {{
+          podman_common_parsed_reqs
+          | map(attribute='collections')
+          | select('defined')
+          | sum(start=[])
+          | default([])
+          | unique
+        }}
+      roles: >-
+        {{
+          podman_common_parsed_reqs
+          | map(attribute='roles')
+          | select('defined')
+          | sum(start=[])
+          | default([])
+        }}
+  when: podman_common_parsed_reqs is defined
+
+- name: Deduplicate roles entries by stringified identity (name/src/version)
+  when: podman_common_merged is defined
+  ansible.builtin.set_fact:
+    podman_common_merged:
+      collections: "{{ podman_common_merged.collections }}"
+      roles: >-
+        {{
+          podman_common_merged.roles
+          | map('to_nice_yaml')   # stable string representation
+          | unique
+          | map('from_yaml')     # back to structured items
+          | list
+        }}
+
+- name: Write combined requirements file
+  when:
+    - podman_common_req_strategy == 'merge'
+    - podman_common_merged is defined
+  ansible.builtin.copy:
+    dest: "{{ podman_common_combined_requirements }}"
+    content: "{{ podman_common_merged | to_nice_yaml(indent=2) }}"
+    mode: '0644'
+
+- name: Install combined requirements (merge strategy)
+  when:
+    - podman_common_req_strategy == 'merge'
+    - podman_common_run_galaxy | bool
+    - podman_common_merged is defined
+  ansible.builtin.command:
+    cmd: >
+      ansible-galaxy collection install -r "{{ podman_common_combined_requirements }}"
+      --collections-path "{{ podman_common_galaxy_collections_path }}"
+  register: _galaxy_col_install
+  changed_when: "'installed' in _galaxy_col_install.stdout or _galaxy_col_install.rc == 0"
+
+- name: Install roles from combined requirements (merge strategy)
+  when:
+    - podman_common_req_strategy == 'merge'
+    - podman_common_run_galaxy | bool
+    - podman_common_merged is defined
+  ansible.builtin.command:
+    cmd: >
+      ansible-galaxy role install -r "{{ podman_common_combined_requirements }}"
+      --roles-path "{{ podman_common_galaxy_roles_path }}"
+  register: _galaxy_role_install
+  changed_when: "'installed' in _galaxy_role_install.stdout or _galaxy_role_install.rc == 0"
+
+- name: Per-role install: loop over each existing requirements file and install separately
+  when:
+    - podman_common_req_strategy == 'per_role'
+    - podman_common_run_galaxy | bool
+    - podman_common_req_files_existing | length > 0
+  block:
+    - name: Install collections/roles per-role using ansible-galaxy
+      ansible.builtin.command:
+        cmd: >
+          ansible-galaxy collection install -r "{{ item }}" --collections-path "{{ podman_common_galaxy_collections_path }}"
+      loop: "{{ podman_common_req_files_existing }}"
+      loop_control:
+        label: "{{ item }}"
+      register: _perrole_col_install
+      failed_when: false
+
+    - name: Install roles per-role using ansible-galaxy
+      ansible.builtin.command:
+        cmd: >
+          ansible-galaxy role install -r "{{ item }}" --roles-path "{{ podman_common_galaxy_roles_path }}"
+      loop: "{{ podman_common_req_files_existing }}"
+      loop_control:
+        label: "{{ item }}"
+      register: _perrole_role_install
+      failed_when: false
+
+- name: Debug summary of requirement installs
+  ansible.builtin.debug:
+    msg:
+      - "Requirement files found: {{ podman_common_req_files_existing | default([]) }}"
+      - "Merged requirements path: {{ podman_common_combined_requirements }}"
+      - "Merge/install strategy: {{ podman_common_req_strategy }}"
+      - "Galaxy roles path: {{ podman_common_galaxy_roles_path }}"
+      - "Galaxy collections path: {{ podman_common_galaxy_collections_path }}"
+      - "Run galaxy commands: {{ podman_common_run_galaxy | default(true) }}"
